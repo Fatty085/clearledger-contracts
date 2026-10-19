@@ -2015,6 +2015,114 @@ fn test_expire_listing_one_second_before_boundary_panics() {
     client.expire_listing(&invoice_id, &issuer);
 }
 
+/// Same-ledger race at the exact expiry deadline: expiry is inclusive, so
+/// `expire_listing` wins even though it was submitted first, and funding then
+/// observes `Expired` and fails without writing funding state.
+#[test]
+fn test_same_ledger_expire_then_fund_at_deadline_expire_wins() {
+    let (env, client, issuer, buyer, _, usdc) = setup();
+    let due_date = env.ledger().timestamp() + DEFAULT_DUE_OFFSET;
+    let invoice_id = client.create(&issuer, &buyer, &DEFAULT_FACE_VALUE, &due_date, &usdc);
+    attest(&env, &client, &invoice_id);
+    client.set_expiry_window(&100);
+    client.list_for_financing(&invoice_id, &DEFAULT_DISCOUNT_BPS);
+    let deadline = client.get(&invoice_id).listed_at.unwrap() + 100;
+
+    let pool = mock_pool_with_asset(&env, &usdc);
+    client.set_pool_contract(&pool);
+    env.ledger().set_timestamp(deadline);
+
+    assert!(client.expire_listing(&invoice_id, &issuer));
+    assert!(client
+        .try_mark_funded(&invoice_id, &pool, &usdc, &DEFAULT_FUNDED_AMOUNT)
+        .is_err());
+
+    let invoice = client.get(&invoice_id);
+    assert_eq!(invoice.status, InvoiceStatus::Expired);
+    assert_eq!(invoice.funded_amount, 0);
+    assert_eq!(invoice.funded_at, None);
+    assert_eq!(invoice.funding_pool, None);
+}
+
+/// Same-ledger race at the exact expiry deadline with funding submitted first:
+/// funding still fails because the deadline is inclusive, then expiry succeeds.
+#[test]
+fn test_same_ledger_fund_then_expire_at_deadline_expire_wins() {
+    let (env, client, issuer, buyer, _, usdc) = setup();
+    let due_date = env.ledger().timestamp() + DEFAULT_DUE_OFFSET;
+    let invoice_id = client.create(&issuer, &buyer, &DEFAULT_FACE_VALUE, &due_date, &usdc);
+    attest(&env, &client, &invoice_id);
+    client.set_expiry_window(&100);
+    client.list_for_financing(&invoice_id, &DEFAULT_DISCOUNT_BPS);
+    let deadline = client.get(&invoice_id).listed_at.unwrap() + 100;
+
+    let pool = mock_pool_with_asset(&env, &usdc);
+    client.set_pool_contract(&pool);
+    env.ledger().set_timestamp(deadline);
+
+    assert!(client
+        .try_mark_funded(&invoice_id, &pool, &usdc, &DEFAULT_FUNDED_AMOUNT)
+        .is_err());
+    assert!(client.expire_listing(&invoice_id, &issuer));
+
+    let invoice = client.get(&invoice_id);
+    assert_eq!(invoice.status, InvoiceStatus::Expired);
+    assert_eq!(invoice.funded_amount, 0);
+    assert_eq!(invoice.funded_at, None);
+    assert_eq!(invoice.funding_pool, None);
+}
+
+/// One tick before expiry, the listing is still fundable: expire-then-fund
+/// leaves the invoice `Funded` because expiry failed with `ListingNotExpired`.
+#[test]
+fn test_same_ledger_expire_then_fund_before_deadline_fund_wins() {
+    let (env, client, issuer, buyer, _, usdc) = setup();
+    let due_date = env.ledger().timestamp() + DEFAULT_DUE_OFFSET;
+    let invoice_id = client.create(&issuer, &buyer, &DEFAULT_FACE_VALUE, &due_date, &usdc);
+    attest(&env, &client, &invoice_id);
+    client.set_expiry_window(&100);
+    client.list_for_financing(&invoice_id, &DEFAULT_DISCOUNT_BPS);
+    let deadline = client.get(&invoice_id).listed_at.unwrap() + 100;
+
+    let pool = mock_pool_with_asset(&env, &usdc);
+    client.set_pool_contract(&pool);
+    env.ledger().set_timestamp(deadline - 1);
+
+    assert!(client.try_expire_listing(&invoice_id, &issuer).is_err());
+    assert!(client.mark_funded(&invoice_id, &pool, &usdc, &DEFAULT_FUNDED_AMOUNT));
+
+    let invoice = client.get(&invoice_id);
+    assert_eq!(invoice.status, InvoiceStatus::Funded);
+    assert_eq!(invoice.funded_at, Some(deadline - 1));
+    assert_eq!(invoice.funding_pool, Some(pool));
+}
+
+/// One tick before expiry with funding submitted first: funding wins and the
+/// later expiry observes `Funded`, fails, and does not overwrite funding state.
+#[test]
+fn test_same_ledger_fund_then_expire_before_deadline_fund_wins() {
+    let (env, client, issuer, buyer, _, usdc) = setup();
+    let due_date = env.ledger().timestamp() + DEFAULT_DUE_OFFSET;
+    let invoice_id = client.create(&issuer, &buyer, &DEFAULT_FACE_VALUE, &due_date, &usdc);
+    attest(&env, &client, &invoice_id);
+    client.set_expiry_window(&100);
+    client.list_for_financing(&invoice_id, &DEFAULT_DISCOUNT_BPS);
+    let deadline = client.get(&invoice_id).listed_at.unwrap() + 100;
+
+    let pool = mock_pool_with_asset(&env, &usdc);
+    client.set_pool_contract(&pool);
+    env.ledger().set_timestamp(deadline - 1);
+
+    assert!(client.mark_funded(&invoice_id, &pool, &usdc, &DEFAULT_FUNDED_AMOUNT));
+    assert!(client.try_expire_listing(&invoice_id, &issuer).is_err());
+
+    let invoice = client.get(&invoice_id);
+    assert_eq!(invoice.status, InvoiceStatus::Funded);
+    assert_eq!(invoice.funded_amount, DEFAULT_FUNDED_AMOUNT);
+    assert_eq!(invoice.funded_at, Some(deadline - 1));
+    assert_eq!(invoice.funding_pool, Some(pool));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #18)")]
 fn test_set_expiry_window_rejects_out_of_bounds() {

@@ -1294,9 +1294,21 @@ impl InvoiceContract {
     ///   address that can self-authorize could hijack an invoice's
     ///   `funding_pool` (issue #553).
     /// * `InvoiceError::InvalidStatusTransition` if invoice status is not `Listed`.
+    /// * `InvoiceError::ListingExpired` if `now >= listed_at + expiry_window`.
+    ///   A listing is no longer fundable from its expiry deadline onward, even
+    ///   when `expire_listing` has not been called yet.
     /// * `InvoiceError::UnsupportedAsset` if the asset does not match the invoice funding asset.
     /// * `InvoiceError::InvalidAmount` if `funded_amount` is zero or exceeds
     ///   the invoice's `face_value` (issue #554).
+    ///
+    /// # Same-ledger ordering
+    /// Funding and expiry are ordered by ledger time, not by submission order.
+    /// Before the deadline, funding wins: a same-ledger `expire_listing` sees
+    /// `Funded` and fails with `InvalidStatusTransition`. At or after the
+    /// deadline, expiry wins: funding fails with `ListingExpired` regardless
+    /// of whether `expire_listing` ran first. The first call that changes the
+    /// status wins; the second observes the new status and fails, leaving no
+    /// partial state.
     ///
     /// # Returns
     /// * `bool` - `true` when funding is recorded.
@@ -1343,6 +1355,19 @@ impl InvoiceContract {
             .unwrap_or_else(|| panic_with_error!(&env, InvoiceError::NotFound));
         if invoice.status != InvoiceStatus::Listed {
             panic_with_error!(&env, InvoiceError::InvalidStatusTransition);
+        }
+        let expiry_window = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExpiryWindow)
+            .unwrap_or(7 * 24 * 60 * 60);
+        let deadline = invoice
+            .listed_at
+            .unwrap_or(0)
+            .checked_add(expiry_window)
+            .unwrap_or_else(|| panic_with_error!(&env, InvoiceError::MathOverflow));
+        if env.ledger().timestamp() >= deadline {
+            panic_with_error!(&env, InvoiceError::ListingExpired);
         }
         if funded_amount > invoice.face_value {
             panic_with_error!(&env, InvoiceError::InvalidAmount);
@@ -2042,6 +2067,15 @@ impl InvoiceContract {
     /// * `InvoiceError::NotAuthorized` if `caller` is neither the issuer nor the admin.
     /// * `InvoiceError::ListingNotExpired` if `now < listed_at + expiry_window`.
     /// * `InvoiceError::MathOverflow` if `listed_at + expiry_window` overflows.
+    ///
+    /// # Same-ledger ordering
+    /// The deadline is inclusive: at exactly `listed_at + expiry_window` the
+    /// listing is already expired. If `mark_funded` ran first in the same
+    /// ledger, this call sees `Funded` and fails with
+    /// `InvalidStatusTransition`; if it runs first, funding then fails with
+    /// `ListingExpired`. Before the deadline the reverse holds: funding wins
+    /// and this call fails with `ListingNotExpired`. In every ordering at most
+    /// one of the two calls mutates the listing.
     ///
     /// # Returns
     /// * `bool` - `true` when the listing is expired.

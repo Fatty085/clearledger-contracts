@@ -37,4 +37,8 @@ pub enum InvoiceError {
     /// [`MAX_BATCH_SIZE`](crate::MAX_BATCH_SIZE), which would defeat the
     /// per-call cost bound batching exists to provide.
     BatchSizeExceeded = 28,
+    /// Funding was attempted at or after the listing's expiry deadline.
+    /// Expiry is time-based, so it takes effect even if `expire_listing` has
+    /// not been called yet in this ledger.
+    ListingExpired = 29,
 }
