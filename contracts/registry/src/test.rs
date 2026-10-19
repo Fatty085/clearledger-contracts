@@ -3,8 +3,8 @@
 extern crate std;
 
 use crate::{
-    DataKey, Profile, RegistryContract, RegistryContractClient, Role, VerificationStatus,
-    TTL_EXTEND_TO, TTL_THRESHOLD,
+    DataKey, Profile, RegistryContract, RegistryContractClient, RevocationReason, Role,
+    VerificationStatus, TTL_EXTEND_TO, TTL_THRESHOLD,
 };
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, TestRunner};
@@ -310,7 +310,7 @@ fn test_reinstate_restores_verified_and_emits_event() {
             (
                 client.address.clone(),
                 (Symbol::new(&env, "address_revoked"), issuer.clone()).into_val(&env),
-                ().into_val(&env),
+                RevocationReason::Unspecified.into_val(&env),
             ),
             (
                 client.address.clone(),
@@ -1814,10 +1814,47 @@ fn test_revoke_emits_event() {
             (
                 client.address.clone(),
                 (Symbol::new(&env, "address_revoked"), issuer.clone()).into_val(&env),
-                ().into_val(&env),
+                RevocationReason::Unspecified.into_val(&env),
             ),
         ]
     );
+}
+
+#[test]
+fn test_revoke_with_reason_emits_explicit_reason_code() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let issuer = Address::generate(&env);
+    client.register_issuer(&issuer, &map![&env]);
+    client.verify_profile(&issuer, &true);
+
+    client.revoke_with_reason(&issuer, &RevocationReason::Fraud);
+
+    assert!(!client.is_verified(&issuer));
+    let events = env.events().all();
+    let event = events.last().unwrap();
+    assert_eq!(
+        event.1,
+        (Symbol::new(&env, "address_revoked"), issuer.clone()).into_val(&env)
+    );
+    assert_eq!(event.2, RevocationReason::Fraud.into_val(&env));
+    assert_eq!(event.2, 2u32.into_val(&env));
+}
+
+#[test]
+fn test_revocation_reason_discriminants_are_stable() {
+    let env = Env::default();
+    let cases = [
+        (RevocationReason::Unspecified, 0u32),
+        (RevocationReason::Compliance, 1u32),
+        (RevocationReason::Fraud, 2u32),
+        (RevocationReason::Inactivity, 3u32),
+        (RevocationReason::Other, 4u32),
+    ];
+    for (reason, code) in cases {
+        assert_eq!(reason.into_val(&env), code.into_val(&env));
+    }
 }
 
 // ============== ISSUE #179: TTL EXTENSION ON READ ==============

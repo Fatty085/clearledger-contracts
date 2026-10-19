@@ -634,6 +634,41 @@ impl RegistryContract {
     /// let result = client.revoke(&issuer);
     /// ```
     pub fn revoke(env: Env, address: Address) -> bool {
+        Self::revoke_with_reason(env, address, RevocationReason::Unspecified)
+    }
+
+    /// Revokes a registered profile and records a machine-readable reason.
+    ///
+    /// This is the reason-aware variant of [`revoke`](Self::revoke). The
+    /// reason is emitted in the `address_revoked` event data as its stable
+    /// `u32` discriminant. Behaviour, auth and idempotency are otherwise
+    /// identical: an already-unverified profile returns `true` without
+    /// re-emitting the event.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `address` - The address of the profile to revoke.
+    /// * `reason` - Bounded [`RevocationReason`] supplied by the admin.
+    ///
+    /// # Auth
+    /// * Requires admin authorization (the stored admin from `DataKey::Admin`).
+    ///
+    /// # Returns
+    /// * `true` if the profile is now in revoked state (including if it was
+    ///   already revoked).
+    ///
+    /// # Panics
+    /// * `NotFound` if the address is not registered.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = client.revoke_with_reason(&issuer, &RevocationReason::Fraud);
+    /// ```
+    pub fn revoke_with_reason(
+        env: Env,
+        address: Address,
+        reason: RevocationReason,
+    ) -> bool {
         require_not_paused(&env);
         let admin = Self::require_admin(&env);
         admin.require_auth();
@@ -652,7 +687,7 @@ impl RegistryContract {
         env.storage()
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
-        events::address_revoked(&env, &address);
+        events::address_revoked(&env, &address, &reason);
         Self::extend_instance_ttl(&env);
         true
     }

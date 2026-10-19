@@ -680,9 +680,35 @@ Emitted when an address is revoked (issuer or buyer).
 | **Topics** | | |
 | `topic[0]` | `Symbol` | `"address_revoked"` |
 | `topic[1]` | `Address` | Revoked address |
-| **Data** | `()` | None |
+| **Data** | `RevocationReason` (`u32`) | Machine-readable reason code (see below) |
 
-**Emitted by:** `revoke()` in `contracts/registry/src/lib.rs:498`
+**Emitted by:** `revoke()` (defaults to `Unspecified`) and
+`revoke_with_reason()` in `contracts/registry/src/lib.rs`.
+
+#### Revocation reason codes
+
+`RevocationReason` is a bounded `#[contracttype]` enum serialized as a
+`u32` in the event data. These discriminants are ABI-stable; new codes may be
+appended, but existing values are never renumbered.
+
+| Code | Variant | Meaning | Suggested display |
+|------|---------|---------|-------------------|
+| `0` | `Unspecified` | No reason supplied, including all legacy `revoke(address)` calls. | "Revoked" (neutral) |
+| `1` | `Compliance` | Regulatory or policy compliance action. | "Revoked: compliance" |
+| `2` | `Fraud` | Suspected or confirmed fraud. | "Revoked: fraud" (high severity) |
+| `3` | `Inactivity` | Account dormant under the operator's inactivity policy. | "Revoked: inactivity" |
+| `4` | `Other` | Any reason not covered above. | "Revoked: other" |
+
+Decoding guidance for off-chain indexers:
+
+- Read the event **data** as a `u32`; do not infer the reason from topics.
+- Preserve unknown codes as-is and display a generic "Revoked (reason code N)"
+  label so future appended codes degrade gracefully.
+- Treat `Fraud` and `Compliance` as high-severity labels; `Unspecified`,
+  `Inactivity` and `Other` should not be presented as fraud accusations.
+- `verify_profile(address, false)` does **not** emit this event (it emits
+  `profile_verified` with `false` and still marks the profile revoked), so it
+  carries no reason code.
 
 ---
 
