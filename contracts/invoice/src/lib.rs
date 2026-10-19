@@ -513,6 +513,9 @@ impl InvoiceContract {
             .instance()
             .set(&DataKey::SupportedAssetCount, &(count + 1));
         env.storage().persistent().set(&key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
         Self::extend_instance_ttl(&env);
         events::supported_asset_added(&env, &asset);
     }
@@ -3015,6 +3018,9 @@ fn increment_status_count(env: &Env, status: InvoiceStatus) {
     let key = DataKey::StatusCount(status as u32);
     let current: u64 = env.storage().persistent().get(&key).unwrap_or(0u64);
     env.storage().persistent().set(&key, &(current + 1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 fn decrement_status_count(env: &Env, status: InvoiceStatus) {
@@ -3024,6 +3030,9 @@ fn decrement_status_count(env: &Env, status: InvoiceStatus) {
         .checked_sub(1)
         .unwrap_or_else(|| panic_with_error!(env, InvoiceError::InvalidStatusTransition));
     env.storage().persistent().set(&key, &next);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 fn read_status_count(env: &Env, status: InvoiceStatus) -> u64 {
