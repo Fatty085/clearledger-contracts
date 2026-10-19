@@ -1019,3 +1019,37 @@ fn test_partial_repayment_then_default_pool_loss_calculation() {
     let returned = pool.withdraw(&lp, &shares);
     assert_eq!(returned, deposit_amount - expected_loss);
 }
+
+// Issue #98: explicit pool-authorized issuer payout after the real funding flow.
+// Delivery confirmation itself currently changes status only; this exercises the
+// existing escrow payout entrypoint, without implying an automatic payout hook.
+#[test]
+fn test_funded_invoice_explicit_issuer_payout_is_exactly_once() {
+    let lifecycle = setup_fee_lifecycle();
+    lifecycle.pool.deposit(&lifecycle.lp, &12_000_000_000);
+    let token = MockTokenClient::new(&lifecycle.env, &lifecycle.usdc_id);
+    let issuer_before = token.balance(&lifecycle.issuer);
+    let (invoice_id, _) = create_fee_lifecycle_invoice(&lifecycle);
+    let escrow = EscrowContractClient::new(&lifecycle.env, &lifecycle.escrow_id);
+    let funded = lifecycle.invoice.get(&invoice_id).funded_amount;
+    assert_eq!(escrow.get_locked(&invoice_id), funded);
+    assert_eq!(token.balance(&lifecycle.issuer), issuer_before);
+    let pool_before = token.balance(&lifecycle.pool_id);
+    assert!(escrow.release_to_issuer(&invoice_id, &lifecycle.issuer));
+    assert_eq!(
+        token.balance(&lifecycle.issuer),
+        issuer_before + funded as i128
+    );
+    assert_eq!(token.balance(&lifecycle.escrow_id), 0);
+    assert_eq!(token.balance(&lifecycle.pool_id), pool_before);
+    assert_eq!(escrow.get_locked(&invoice_id), 0);
+    assert!(escrow
+        .try_release_to_issuer(&invoice_id, &lifecycle.issuer)
+        .is_err());
+    assert_eq!(
+        token.balance(&lifecycle.issuer),
+        issuer_before + funded as i128
+    );
+    assert_eq!(token.balance(&lifecycle.escrow_id), 0);
+    assert_eq!(token.balance(&lifecycle.pool_id), pool_before);
+}
